@@ -2,7 +2,11 @@
 
 package f32
 
-import "github.com/tphakala/simd/cpu"
+import (
+	"unsafe"
+
+	"github.com/tphakala/simd/cpu"
+)
 
 // Minimum number of float32 elements required for SIMD operations.
 // AVX processes 8 float32 values per 256-bit register.
@@ -251,6 +255,51 @@ func cumulativeSum32(dst, a []float32) {
 
 func dotProductBatch32(results []float32, rows [][]float32, vec []float32) {
 	vecLen := len(vec)
+	if vecLen == 0 {
+		for i := range rows {
+			results[i] = 0
+		}
+		return
+	}
+	if cpu.X86.AVX512F && cpu.X86.AVX512VL && len(rows) >= 4 && vecLen >= minAVX512Elements {
+		i := 0
+		for i+3 < len(rows) {
+			row0, row1, row2, row3 := rows[i], rows[i+1], rows[i+2], rows[i+3]
+			if len(row0) >= vecLen && len(row1) >= vecLen && len(row2) >= vecLen && len(row3) >= vecLen {
+				dotProduct4AVX512(
+					(*float32)(unsafe.Pointer(&results[i])),
+					(*float32)(unsafe.Pointer(&row0[0])),
+					(*float32)(unsafe.Pointer(&row1[0])),
+					(*float32)(unsafe.Pointer(&row2[0])),
+					(*float32)(unsafe.Pointer(&row3[0])),
+					(*float32)(unsafe.Pointer(&vec[0])),
+					vecLen,
+				)
+				i += 4
+				continue
+			}
+			for j := 0; j < 4; j++ {
+				row := rows[i+j]
+				n := min(len(row), vecLen)
+				if n == 0 {
+					results[i+j] = 0
+				} else {
+					results[i+j] = dotProduct(row[:n], vec[:n])
+				}
+			}
+			i += 4
+		}
+		for ; i < len(rows); i++ {
+			row := rows[i]
+			n := min(len(row), vecLen)
+			if n == 0 {
+				results[i] = 0
+			} else {
+				results[i] = dotProduct(row[:n], vec[:n])
+			}
+		}
+		return
+	}
 	for i, row := range rows {
 		n := min(len(row), vecLen)
 		if n == 0 {
@@ -357,6 +406,9 @@ func addScaledAVX(dst []float32, alpha float32, s []float32)
 //
 //go:noescape
 func dotProductAVX512(a, b []float32) float32
+
+//go:noescape
+func dotProduct4AVX512(results, row0, row1, row2, row3, vec *float32, n int)
 
 //go:noescape
 func addAVX512(dst, a, b []float32)
