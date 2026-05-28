@@ -199,7 +199,8 @@ func DotProductIndexed(dst, base, query []float32, rowIDs []uint32, dims int) bo
 
 // DotProductStrided computes dot products between query and rowCount rows in a
 // flat base slice where row i starts at base[i*stride]. dims and stride are in
-// float32 elements, not bytes. The number of processed rows is
+// float32 elements, not bytes; use stride >= dims for non-overlapping rows.
+// The number of processed rows is
 // min(len(dst), rowCount). Ragged inputs are safe: if query is shorter than dims
 // or a row extends past base, the dot uses the available common prefix;
 // non-positive rowCount/dims/stride or an empty query produce zero scores for

@@ -4171,10 +4171,14 @@ TEXT ·dotProduct4AVX(SB), NOSPLIT, $0-56
     MOVQ vec+40(FP), DI
     MOVQ n+48(FP), CX
 
-    VXORPS Y0, Y0, Y0          // acc0
-    VXORPS Y3, Y3, Y3          // acc1
-    VXORPS Y4, Y4, Y4          // acc2
-    VXORPS Y5, Y5, Y5          // acc3
+    VXORPS Y0, Y0, Y0          // acc0a
+    VXORPS Y3, Y3, Y3          // acc1a
+    VXORPS Y4, Y4, Y4          // acc2a
+    VXORPS Y5, Y5, Y5          // acc3a
+    VXORPS Y6, Y6, Y6          // acc0b
+    VXORPS Y7, Y7, Y7          // acc1b
+    VXORPS Y8, Y8, Y8          // acc2b
+    VXORPS Y9, Y9, Y9          // acc3b
 
     MOVQ CX, AX
     SHRQ $5, AX                // n / 32
@@ -4193,13 +4197,13 @@ dot4_avx_loop32:
 
     VMOVUPS 32(DI), Y1
     VMOVUPS 32(SI), Y2
-    VFMADD231PS Y1, Y2, Y0
+    VFMADD231PS Y1, Y2, Y6
     VMOVUPS 32(R8), Y2
-    VFMADD231PS Y1, Y2, Y3
+    VFMADD231PS Y1, Y2, Y7
     VMOVUPS 32(R9), Y2
-    VFMADD231PS Y1, Y2, Y4
+    VFMADD231PS Y1, Y2, Y8
     VMOVUPS 32(R10), Y2
-    VFMADD231PS Y1, Y2, Y5
+    VFMADD231PS Y1, Y2, Y9
 
     VMOVUPS 64(DI), Y1
     VMOVUPS 64(SI), Y2
@@ -4213,13 +4217,13 @@ dot4_avx_loop32:
 
     VMOVUPS 96(DI), Y1
     VMOVUPS 96(SI), Y2
-    VFMADD231PS Y1, Y2, Y0
+    VFMADD231PS Y1, Y2, Y6
     VMOVUPS 96(R8), Y2
-    VFMADD231PS Y1, Y2, Y3
+    VFMADD231PS Y1, Y2, Y7
     VMOVUPS 96(R9), Y2
-    VFMADD231PS Y1, Y2, Y4
+    VFMADD231PS Y1, Y2, Y8
     VMOVUPS 96(R10), Y2
-    VFMADD231PS Y1, Y2, Y5
+    VFMADD231PS Y1, Y2, Y9
 
     ADDQ $128, DI
     ADDQ $128, SI
@@ -4254,6 +4258,11 @@ dot4_avx_loop8:
     JNZ  dot4_avx_loop8
 
 dot4_avx_reduce:
+    VADDPS Y6, Y0, Y0
+    VADDPS Y7, Y3, Y3
+    VADDPS Y8, Y4, Y4
+    VADDPS Y9, Y5, Y5
+
     // Reduce acc0 into X0.
     VEXTRACTF128 $1, Y0, X1
     VADDPS X1, X0, X0
@@ -4318,10 +4327,14 @@ TEXT ·dotProduct4AVX512(SB), NOSPLIT, $0-56
     MOVQ vec+40(FP), DI
     MOVQ n+48(FP), CX
 
-    VXORPS Z0, Z0, Z0          // acc0
-    VXORPS Z3, Z3, Z3          // acc1
-    VXORPS Z4, Z4, Z4          // acc2
-    VXORPS Z5, Z5, Z5          // acc3
+    VXORPS Z0, Z0, Z0          // acc0a
+    VXORPS Z3, Z3, Z3          // acc1a
+    VXORPS Z4, Z4, Z4          // acc2a
+    VXORPS Z5, Z5, Z5          // acc3a
+    VXORPS Z6, Z6, Z6          // acc0b
+    VXORPS Z7, Z7, Z7          // acc1b
+    VXORPS Z8, Z8, Z8          // acc2b
+    VXORPS Z9, Z9, Z9          // acc3b
 
     MOVQ CX, AX
     SHRQ $6, AX                // n / 64
@@ -4340,13 +4353,13 @@ dot4_512_loop64:
 
     VMOVUPS 64(DI), Z1
     VMOVUPS 64(SI), Z2
-    VFMADD231PS Z1, Z2, Z0
+    VFMADD231PS Z1, Z2, Z6
     VMOVUPS 64(R8), Z2
-    VFMADD231PS Z1, Z2, Z3
+    VFMADD231PS Z1, Z2, Z7
     VMOVUPS 64(R9), Z2
-    VFMADD231PS Z1, Z2, Z4
+    VFMADD231PS Z1, Z2, Z8
     VMOVUPS 64(R10), Z2
-    VFMADD231PS Z1, Z2, Z5
+    VFMADD231PS Z1, Z2, Z9
 
     VMOVUPS 128(DI), Z1
     VMOVUPS 128(SI), Z2
@@ -4360,13 +4373,13 @@ dot4_512_loop64:
 
     VMOVUPS 192(DI), Z1
     VMOVUPS 192(SI), Z2
-    VFMADD231PS Z1, Z2, Z0
+    VFMADD231PS Z1, Z2, Z6
     VMOVUPS 192(R8), Z2
-    VFMADD231PS Z1, Z2, Z3
+    VFMADD231PS Z1, Z2, Z7
     VMOVUPS 192(R9), Z2
-    VFMADD231PS Z1, Z2, Z4
+    VFMADD231PS Z1, Z2, Z8
     VMOVUPS 192(R10), Z2
-    VFMADD231PS Z1, Z2, Z5
+    VFMADD231PS Z1, Z2, Z9
 
     ADDQ $256, DI
     ADDQ $256, SI
@@ -4401,6 +4414,11 @@ dot4_512_loop16:
     JNZ  dot4_512_loop16
 
 dot4_512_reduce:
+    VADDPS Z6, Z0, Z0
+    VADDPS Z7, Z3, Z3
+    VADDPS Z8, Z4, Z4
+    VADDPS Z9, Z5, Z5
+
     // Reduce acc0 into X0.
     VEXTRACTF32X8 $1, Z0, Y1
     VADDPS Y1, Y0, Y0
