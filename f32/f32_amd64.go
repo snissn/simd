@@ -371,11 +371,11 @@ func dotProductIndexed(dst, base, query []float32, rowIDs []uint32, dims int) bo
 			continue
 		}
 		for j := 0; j < batchDotRows; j++ {
-			dst[i+j] = dotProductIndexedTail(base, query, queryFull, rowIDs[i+j], dims, maxRow)
+			dst[i+j] = dotProductIndexedTail(base, query, rowIDs[i+j], dims)
 		}
 	}
 	for ; i < n; i++ {
-		dst[i] = dotProductIndexedTail(base, query, queryFull, rowIDs[i], dims, maxRow)
+		dst[i] = dotProductIndexedTail(base, query, rowIDs[i], dims)
 	}
 	return usedSIMD
 }
@@ -435,11 +435,11 @@ func dotProductStrided(dst, base, query []float32, rowCount, dims, stride int) b
 			continue
 		}
 		for j := 0; j < batchDotRows; j++ {
-			dst[i+j] = dotProductStridedTail(base, query, queryFull, i+j, dims, stride, maxRow)
+			dst[i+j] = dotProductStridedTail(base, query, i+j, dims, stride)
 		}
 	}
 	for ; i < n; i++ {
-		dst[i] = dotProductStridedTail(base, query, queryFull, i, dims, stride, maxRow)
+		dst[i] = dotProductStridedTail(base, query, i, dims, stride)
 	}
 	return usedSIMD
 }
@@ -455,19 +455,11 @@ func rowIDInFullRange(rowID uint32, maxRow int) bool {
 	return maxRow >= 0 && uint64(rowID) <= uint64(maxRow)
 }
 
-func dotProductIndexedTail(base, query, queryFull []float32, rowID uint32, dims, maxRow int) float32 {
-	if rowIDInFullRange(rowID, maxRow) {
-		off := int(rowID) * dims
-		return dotProduct(base[off:off+dims], queryFull)
-	}
+func dotProductIndexedTail(base, query []float32, rowID uint32, dims int) float32 {
 	return dotProductIndexedOneGo(base, query, rowID, dims)
 }
 
-func dotProductStridedTail(base, query, queryFull []float32, row, dims, stride, maxRow int) float32 {
-	if row >= 0 && row <= maxRow {
-		off := row * stride
-		return dotProduct(base[off:off+dims], queryFull)
-	}
+func dotProductStridedTail(base, query []float32, row, dims, stride int) float32 {
 	return dotProductStridedOneGo(base, query, row, dims, stride)
 }
 

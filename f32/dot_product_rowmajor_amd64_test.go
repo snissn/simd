@@ -28,6 +28,9 @@ func TestDotProductRowMajorAMD64ThresholdPredicates(t *testing.T) {
 			t.Fatalf("indexed rows=%d dims=%d unexpectedly enabled", tc.rows, tc.dims)
 		}
 	}
+	if batchDotIndexedSIMDEligible(4, 64, 63) {
+		t.Fatalf("indexed queryLen<dims unexpectedly enabled")
+	}
 
 	stridedEnabled := []struct {
 		rows   int
@@ -59,4 +62,40 @@ func TestDotProductRowMajorAMD64ThresholdPredicates(t *testing.T) {
 			t.Fatalf("strided rows=%d dims=%d stride=%d unexpectedly enabled", tc.rows, tc.dims, tc.stride)
 		}
 	}
+	if batchDotStridedSIMDEligible(4, 64, 0, 64) {
+		t.Fatalf("strided stride=0 unexpectedly enabled")
+	}
+	if batchDotStridedSIMDEligible(4, 64, -1, 64) {
+		t.Fatalf("strided stride=-1 unexpectedly enabled")
+	}
+}
+
+func TestDotProductRowMajorAMD64FalseReturnUsesGoFallbackForTails(t *testing.T) {
+	const dims = 64
+	base := deterministicF32Vector(701, 3*dims)
+	query := deterministicF32Vector(702, dims)
+
+	savedDotProductImpl := dotProductImpl
+	dotProductImpl = func(a, b []float32) float32 {
+		t.Fatalf("false-return fallback tail used dotProduct dispatcher")
+		return 0
+	}
+	defer func() { dotProductImpl = savedDotProductImpl }()
+
+	indexedRowIDs := []uint32{0, 1, 99, 2}
+	indexedGot := make([]float32, len(indexedRowIDs))
+	indexedWant := make([]float32, len(indexedRowIDs))
+	dotProductIndexedGo(indexedWant, base, query, indexedRowIDs, dims)
+	if DotProductIndexed(indexedGot, base, query, indexedRowIDs, dims) {
+		t.Fatalf("indexed ragged batch unexpectedly reported optimized")
+	}
+	assertCloseSlice(t, indexedGot, indexedWant)
+
+	stridedGot := make([]float32, 4)
+	stridedWant := make([]float32, 4)
+	dotProductStridedGo(stridedWant, base, query, 4, dims, dims)
+	if DotProductStrided(stridedGot, base, query, 4, dims, dims) {
+		t.Fatalf("strided ragged batch unexpectedly reported optimized")
+	}
+	assertCloseSlice(t, stridedGot, stridedWant)
 }
