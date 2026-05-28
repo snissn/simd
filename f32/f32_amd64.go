@@ -499,9 +499,9 @@ func batchDotStridedSIMDEligible(rows, dims, stride, queryLen int) bool {
 		switch {
 		case rows == 4 || rows >= 256:
 			return false
-		case contiguous && rows == 16:
+		case contiguous && (rows == 16 || rows == 64):
 			return false
-		case !contiguous && rows == 64:
+		case !contiguous && (rows == 13 || rows == 64):
 			return false
 		default:
 			return true
@@ -514,6 +514,12 @@ func batchDotStridedSIMDEligible(rows, dims, stride, queryLen int) bool {
 		if contiguous && rows == 13 {
 			return false
 		}
+		if !contiguous && rows == 64 {
+			return false
+		}
+	}
+	if !contiguous && dims >= 128 && (rows == 8 || rows == 32) {
+		return false
 	}
 	return true
 }
