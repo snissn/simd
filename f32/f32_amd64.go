@@ -324,6 +324,11 @@ func dotProductIndexed(dst, base, query []float32, rowIDs []uint32, dims int) bo
 		dotProductIndexedGo(dst[:n], base, query, rowIDs[:n], dims)
 		return false
 	}
+	maxRow := fullRowMaxIndex(len(base), dims, dims)
+	if maxRow < 0 {
+		dotProductIndexedGo(dst[:n], base, query, rowIDs[:n], dims)
+		return false
+	}
 	useAVX512 := cpu.X86.AVX512F && cpu.X86.AVX512VL
 	useAVX := !useAVX512 && cpu.X86.AVX2 && cpu.X86.FMA
 	if !useAVX512 && !useAVX {
@@ -331,14 +336,16 @@ func dotProductIndexed(dst, base, query []float32, rowIDs []uint32, dims int) bo
 		return false
 	}
 
+	queryFull := query[:dims]
 	usedSIMD := false
 	i := 0
 	for ; i+batchDotRows-1 < n; i += batchDotRows {
-		off0, ok0 := rowOffsetUint32Full(rowIDs[i], dims, dims, len(base))
-		off1, ok1 := rowOffsetUint32Full(rowIDs[i+1], dims, dims, len(base))
-		off2, ok2 := rowOffsetUint32Full(rowIDs[i+2], dims, dims, len(base))
-		off3, ok3 := rowOffsetUint32Full(rowIDs[i+3], dims, dims, len(base))
-		if ok0 && ok1 && ok2 && ok3 {
+		id0, id1, id2, id3 := rowIDs[i], rowIDs[i+1], rowIDs[i+2], rowIDs[i+3]
+		if rowIDInFullRange(id0, maxRow) && rowIDInFullRange(id1, maxRow) && rowIDInFullRange(id2, maxRow) && rowIDInFullRange(id3, maxRow) {
+			off0 := int(id0) * dims
+			off1 := int(id1) * dims
+			off2 := int(id2) * dims
+			off3 := int(id3) * dims
 			if useAVX512 {
 				dotProduct4AVX512(
 					(*float32)(unsafe.Pointer(&dst[i])),
@@ -346,7 +353,7 @@ func dotProductIndexed(dst, base, query []float32, rowIDs []uint32, dims int) bo
 					(*float32)(unsafe.Pointer(&base[off1])),
 					(*float32)(unsafe.Pointer(&base[off2])),
 					(*float32)(unsafe.Pointer(&base[off3])),
-					(*float32)(unsafe.Pointer(&query[0])),
+					(*float32)(unsafe.Pointer(&queryFull[0])),
 					dims,
 				)
 			} else {
@@ -356,7 +363,7 @@ func dotProductIndexed(dst, base, query []float32, rowIDs []uint32, dims int) bo
 					(*float32)(unsafe.Pointer(&base[off1])),
 					(*float32)(unsafe.Pointer(&base[off2])),
 					(*float32)(unsafe.Pointer(&base[off3])),
-					(*float32)(unsafe.Pointer(&query[0])),
+					(*float32)(unsafe.Pointer(&queryFull[0])),
 					dims,
 				)
 			}
@@ -364,11 +371,11 @@ func dotProductIndexed(dst, base, query []float32, rowIDs []uint32, dims int) bo
 			continue
 		}
 		for j := 0; j < batchDotRows; j++ {
-			dst[i+j] = dotProductIndexedOneGo(base, query, rowIDs[i+j], dims)
+			dst[i+j] = dotProductIndexedTail(base, query, queryFull, rowIDs[i+j], dims, maxRow)
 		}
 	}
 	for ; i < n; i++ {
-		dst[i] = dotProductIndexedOneGo(base, query, rowIDs[i], dims)
+		dst[i] = dotProductIndexedTail(base, query, queryFull, rowIDs[i], dims, maxRow)
 	}
 	return usedSIMD
 }
@@ -382,6 +389,11 @@ func dotProductStrided(dst, base, query []float32, rowCount, dims, stride int) b
 		dotProductStridedGo(dst[:n], base, query, n, dims, stride)
 		return false
 	}
+	maxRow := fullRowMaxIndex(len(base), dims, stride)
+	if maxRow < 0 {
+		dotProductStridedGo(dst[:n], base, query, n, dims, stride)
+		return false
+	}
 	useAVX512 := cpu.X86.AVX512F && cpu.X86.AVX512VL
 	useAVX := !useAVX512 && cpu.X86.AVX2 && cpu.X86.FMA
 	if !useAVX512 && !useAVX {
@@ -389,14 +401,15 @@ func dotProductStrided(dst, base, query []float32, rowCount, dims, stride int) b
 		return false
 	}
 
+	queryFull := query[:dims]
 	usedSIMD := false
 	i := 0
 	for ; i+batchDotRows-1 < n; i += batchDotRows {
-		off0, ok0 := rowOffsetStrideFull(i, stride, dims, len(base))
-		off1, ok1 := rowOffsetStrideFull(i+1, stride, dims, len(base))
-		off2, ok2 := rowOffsetStrideFull(i+2, stride, dims, len(base))
-		off3, ok3 := rowOffsetStrideFull(i+3, stride, dims, len(base))
-		if ok0 && ok1 && ok2 && ok3 {
+		if i+batchDotRows-1 <= maxRow {
+			off0 := i * stride
+			off1 := off0 + stride
+			off2 := off1 + stride
+			off3 := off2 + stride
 			if useAVX512 {
 				dotProduct4AVX512(
 					(*float32)(unsafe.Pointer(&dst[i])),
@@ -404,7 +417,7 @@ func dotProductStrided(dst, base, query []float32, rowCount, dims, stride int) b
 					(*float32)(unsafe.Pointer(&base[off1])),
 					(*float32)(unsafe.Pointer(&base[off2])),
 					(*float32)(unsafe.Pointer(&base[off3])),
-					(*float32)(unsafe.Pointer(&query[0])),
+					(*float32)(unsafe.Pointer(&queryFull[0])),
 					dims,
 				)
 			} else {
@@ -414,7 +427,7 @@ func dotProductStrided(dst, base, query []float32, rowCount, dims, stride int) b
 					(*float32)(unsafe.Pointer(&base[off1])),
 					(*float32)(unsafe.Pointer(&base[off2])),
 					(*float32)(unsafe.Pointer(&base[off3])),
-					(*float32)(unsafe.Pointer(&query[0])),
+					(*float32)(unsafe.Pointer(&queryFull[0])),
 					dims,
 				)
 			}
@@ -422,13 +435,40 @@ func dotProductStrided(dst, base, query []float32, rowCount, dims, stride int) b
 			continue
 		}
 		for j := 0; j < batchDotRows; j++ {
-			dst[i+j] = dotProductStridedOneGo(base, query, i+j, dims, stride)
+			dst[i+j] = dotProductStridedTail(base, query, queryFull, i+j, dims, stride, maxRow)
 		}
 	}
 	for ; i < n; i++ {
-		dst[i] = dotProductStridedOneGo(base, query, i, dims, stride)
+		dst[i] = dotProductStridedTail(base, query, queryFull, i, dims, stride, maxRow)
 	}
 	return usedSIMD
+}
+
+func fullRowMaxIndex(baseLen, dims, stride int) int {
+	if dims <= 0 || stride <= 0 || baseLen < dims {
+		return -1
+	}
+	return (baseLen - dims) / stride
+}
+
+func rowIDInFullRange(rowID uint32, maxRow int) bool {
+	return maxRow >= 0 && uint64(rowID) <= uint64(maxRow)
+}
+
+func dotProductIndexedTail(base, query, queryFull []float32, rowID uint32, dims, maxRow int) float32 {
+	if rowIDInFullRange(rowID, maxRow) {
+		off := int(rowID) * dims
+		return dotProduct(base[off:off+dims], queryFull)
+	}
+	return dotProductIndexedOneGo(base, query, rowID, dims)
+}
+
+func dotProductStridedTail(base, query, queryFull []float32, row, dims, stride, maxRow int) float32 {
+	if row >= 0 && row <= maxRow {
+		off := row * stride
+		return dotProduct(base[off:off+dims], queryFull)
+	}
+	return dotProductStridedOneGo(base, query, row, dims, stride)
 }
 
 func batchDotSIMDEligible(rows, dims, queryLen int) bool {
