@@ -310,6 +310,274 @@ func dotProductBatch32(results []float32, rows [][]float32, vec []float32) {
 	}
 }
 
+const (
+	batchDotRows    = 4
+	batchDotMinDims = 64
+)
+
+func dotProductIndexed(dst, base, query []float32, rowIDs []uint32, dims int) bool {
+	n := min(len(dst), len(rowIDs))
+	if n == 0 {
+		return false
+	}
+	if !batchDotIndexedSIMDEligible(n, dims, len(query)) {
+		dotProductIndexedFallback(dst[:n], base, query, rowIDs[:n], dims)
+		return false
+	}
+	maxRow := fullRowMaxIndex(len(base), dims, dims)
+	if maxRow < 0 {
+		dotProductIndexedFallback(dst[:n], base, query, rowIDs[:n], dims)
+		return false
+	}
+	useAVX512 := cpu.X86.AVX512F && cpu.X86.AVX512VL
+	useAVX := !useAVX512 && cpu.X86.AVX2 && cpu.X86.FMA
+	if !useAVX512 && !useAVX {
+		dotProductIndexedFallback(dst[:n], base, query, rowIDs[:n], dims)
+		return false
+	}
+
+	queryFull := query[:dims]
+	usedSIMD := false
+	i := 0
+	for ; i+batchDotRows-1 < n; i += batchDotRows {
+		id0, id1, id2, id3 := rowIDs[i], rowIDs[i+1], rowIDs[i+2], rowIDs[i+3]
+		if rowIDInFullRange(id0, maxRow) && rowIDInFullRange(id1, maxRow) && rowIDInFullRange(id2, maxRow) && rowIDInFullRange(id3, maxRow) {
+			off0 := int(id0) * dims
+			off1 := int(id1) * dims
+			off2 := int(id2) * dims
+			off3 := int(id3) * dims
+			if useAVX512 {
+				dotProduct4AVX512(
+					(*float32)(unsafe.Pointer(&dst[i])),
+					(*float32)(unsafe.Pointer(&base[off0])),
+					(*float32)(unsafe.Pointer(&base[off1])),
+					(*float32)(unsafe.Pointer(&base[off2])),
+					(*float32)(unsafe.Pointer(&base[off3])),
+					(*float32)(unsafe.Pointer(&queryFull[0])),
+					dims,
+				)
+			} else {
+				dotProduct4AVX(
+					(*float32)(unsafe.Pointer(&dst[i])),
+					(*float32)(unsafe.Pointer(&base[off0])),
+					(*float32)(unsafe.Pointer(&base[off1])),
+					(*float32)(unsafe.Pointer(&base[off2])),
+					(*float32)(unsafe.Pointer(&base[off3])),
+					(*float32)(unsafe.Pointer(&queryFull[0])),
+					dims,
+				)
+			}
+			usedSIMD = true
+			continue
+		}
+		for j := 0; j < batchDotRows; j++ {
+			dst[i+j] = dotProductIndexedTail(base, query, queryFull, rowIDs[i+j], dims, maxRow, usedSIMD)
+		}
+	}
+	for ; i < n; i++ {
+		dst[i] = dotProductIndexedTail(base, query, queryFull, rowIDs[i], dims, maxRow, usedSIMD)
+	}
+	return usedSIMD
+}
+
+func dotProductStrided(dst, base, query []float32, rowCount, dims, stride int) bool {
+	if rowCount <= 0 || len(dst) == 0 {
+		return false
+	}
+	n := min(len(dst), rowCount)
+	if !batchDotStridedSIMDEligible(n, dims, stride, len(query)) {
+		dotProductStridedFallback(dst[:n], base, query, n, dims, stride)
+		return false
+	}
+	maxRow := fullRowMaxIndex(len(base), dims, stride)
+	if maxRow < 0 {
+		dotProductStridedFallback(dst[:n], base, query, n, dims, stride)
+		return false
+	}
+	useAVX512 := cpu.X86.AVX512F && cpu.X86.AVX512VL
+	useAVX := !useAVX512 && cpu.X86.AVX2 && cpu.X86.FMA
+	if !useAVX512 && !useAVX {
+		dotProductStridedFallback(dst[:n], base, query, n, dims, stride)
+		return false
+	}
+
+	queryFull := query[:dims]
+	usedSIMD := false
+	i := 0
+	for ; i+batchDotRows-1 < n; i += batchDotRows {
+		if i+batchDotRows-1 <= maxRow {
+			off0 := i * stride
+			off1 := off0 + stride
+			off2 := off1 + stride
+			off3 := off2 + stride
+			if useAVX512 {
+				dotProduct4AVX512(
+					(*float32)(unsafe.Pointer(&dst[i])),
+					(*float32)(unsafe.Pointer(&base[off0])),
+					(*float32)(unsafe.Pointer(&base[off1])),
+					(*float32)(unsafe.Pointer(&base[off2])),
+					(*float32)(unsafe.Pointer(&base[off3])),
+					(*float32)(unsafe.Pointer(&queryFull[0])),
+					dims,
+				)
+			} else {
+				dotProduct4AVX(
+					(*float32)(unsafe.Pointer(&dst[i])),
+					(*float32)(unsafe.Pointer(&base[off0])),
+					(*float32)(unsafe.Pointer(&base[off1])),
+					(*float32)(unsafe.Pointer(&base[off2])),
+					(*float32)(unsafe.Pointer(&base[off3])),
+					(*float32)(unsafe.Pointer(&queryFull[0])),
+					dims,
+				)
+			}
+			usedSIMD = true
+			continue
+		}
+		for j := 0; j < batchDotRows; j++ {
+			dst[i+j] = dotProductStridedTail(base, query, queryFull, i+j, dims, stride, maxRow, usedSIMD)
+		}
+	}
+	for ; i < n; i++ {
+		dst[i] = dotProductStridedTail(base, query, queryFull, i, dims, stride, maxRow, usedSIMD)
+	}
+	return usedSIMD
+}
+
+func fullRowMaxIndex(baseLen, dims, stride int) int {
+	if dims <= 0 || stride <= 0 || baseLen < dims {
+		return -1
+	}
+	return (baseLen - dims) / stride
+}
+
+func rowIDInFullRange(rowID uint32, maxRow int) bool {
+	return maxRow >= 0 && uint64(rowID) <= uint64(maxRow)
+}
+
+func dotProductIndexedFallback(dst, base, query []float32, rowIDs []uint32, dims int) {
+	n := min(len(dst), len(rowIDs))
+	if n == 0 {
+		return
+	}
+	if dims <= 0 || len(query) == 0 {
+		clear(dst[:n])
+		return
+	}
+	queryN := min(dims, len(query))
+	queryFull := query[:queryN]
+	maxRow := fullRowMaxIndex(len(base), queryN, dims)
+	for i := 0; i < n; i++ {
+		rowID := rowIDs[i]
+		if rowIDInFullRange(rowID, maxRow) {
+			off := int(rowID) * dims
+			dst[i] = dotProduct(base[off:off+queryN], queryFull)
+			continue
+		}
+		dst[i] = dotProductIndexedOneGo(base, query, rowID, dims)
+	}
+}
+
+func dotProductStridedFallback(dst, base, query []float32, rowCount, dims, stride int) {
+	if rowCount <= 0 || len(dst) == 0 {
+		return
+	}
+	n := min(len(dst), rowCount)
+	if dims <= 0 || stride <= 0 || len(query) == 0 {
+		clear(dst[:n])
+		return
+	}
+	queryN := min(dims, len(query))
+	queryFull := query[:queryN]
+	maxRow := fullRowMaxIndex(len(base), queryN, stride)
+	if n-1 <= maxRow {
+		for i, off := 0, 0; i < n; i, off = i+1, off+stride {
+			dst[i] = dotProduct(base[off:off+queryN], queryFull)
+		}
+		return
+	}
+	for i := 0; i < n; i++ {
+		if i <= maxRow {
+			off := i * stride
+			dst[i] = dotProduct(base[off:off+queryN], queryFull)
+			continue
+		}
+		dst[i] = dotProductStridedOneGo(base, query, i, dims, stride)
+	}
+}
+
+func dotProductIndexedTail(base, query, queryFull []float32, rowID uint32, dims, maxRow int, allowDotProduct bool) float32 {
+	if allowDotProduct && rowIDInFullRange(rowID, maxRow) {
+		off := int(rowID) * dims
+		return dotProduct(base[off:off+dims], queryFull)
+	}
+	return dotProductIndexedOneGo(base, query, rowID, dims)
+}
+
+func dotProductStridedTail(base, query, queryFull []float32, row, dims, stride, maxRow int, allowDotProduct bool) float32 {
+	if allowDotProduct && row >= 0 && row <= maxRow {
+		off := row * stride
+		return dotProduct(base[off:off+dims], queryFull)
+	}
+	return dotProductStridedOneGo(base, query, row, dims, stride)
+}
+
+func batchDotIndexedSIMDEligible(rows, dims, queryLen int) bool {
+	if rows < batchDotRows || dims < batchDotMinDims || queryLen < dims {
+		return false
+	}
+	// Conservative thresholds from the TreeDB-shaped Intel i5-11400F matrix.
+	// Keep slow large-row shapes on the fallback path until broader hardware
+	// evidence justifies enabling them.
+	if dims >= 2048 {
+		return rows < 64
+	}
+	if dims >= 768 {
+		return rows < 256
+	}
+	return true
+}
+
+func batchDotStridedSIMDEligible(rows, dims, stride, queryLen int) bool {
+	if rows < batchDotRows || dims < batchDotMinDims || stride <= 0 || queryLen < dims {
+		return false
+	}
+	// Conservative thresholds from the TreeDB-shaped Intel i5-11400F matrix.
+	// Strided thresholds differ for contiguous and padded rows because cache-line
+	// behavior changes the break-even point for larger dimensions.
+	contiguous := stride == dims
+	if dims >= 2048 {
+		switch {
+		case rows == 4 || rows >= 256:
+			return false
+		case contiguous && (rows == 16 || rows == 64):
+			return false
+		case !contiguous && (rows == 13 || rows == 64):
+			return false
+		default:
+			return true
+		}
+	}
+	if dims >= 768 {
+		if rows >= 256 {
+			return false
+		}
+		if contiguous && rows == 13 {
+			return false
+		}
+		if !contiguous && rows == 64 {
+			return false
+		}
+	}
+	if contiguous && dims == 128 && rows == 4 {
+		return false
+	}
+	if !contiguous && dims >= 128 && (rows == 8 || rows == 32) {
+		return false
+	}
+	return true
+}
+
 func convolveValid32(dst, signal, kernel []float32) {
 	kLen := len(kernel)
 	for i := range dst {
@@ -350,6 +618,9 @@ func convolveValidMulti32(dsts [][]float32, signal []float32, kernels [][]float3
 //
 //go:noescape
 func dotProductAVX(a, b []float32) float32
+
+//go:noescape
+func dotProduct4AVX(results, row0, row1, row2, row3, vec *float32, n int)
 
 //go:noescape
 func addAVX(dst, a, b []float32)
