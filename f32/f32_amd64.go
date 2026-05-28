@@ -310,6 +310,131 @@ func dotProductBatch32(results []float32, rows [][]float32, vec []float32) {
 	}
 }
 
+const (
+	batchDotRows    = 4
+	batchDotMinDims = 64
+)
+
+func dotProductIndexed(dst, base, query []float32, rowIDs []uint32, dims int) bool {
+	n := min(len(dst), len(rowIDs))
+	if n == 0 {
+		return false
+	}
+	if !batchDotSIMDEligible(n, dims, len(query)) {
+		dotProductIndexedGo(dst[:n], base, query, rowIDs[:n], dims)
+		return false
+	}
+	useAVX512 := cpu.X86.AVX512F && cpu.X86.AVX512VL
+	useAVX := !useAVX512 && cpu.X86.AVX2 && cpu.X86.FMA
+	if !useAVX512 && !useAVX {
+		dotProductIndexedGo(dst[:n], base, query, rowIDs[:n], dims)
+		return false
+	}
+
+	usedSIMD := false
+	i := 0
+	for ; i+batchDotRows-1 < n; i += batchDotRows {
+		off0, ok0 := rowOffsetUint32Full(rowIDs[i], dims, dims, len(base))
+		off1, ok1 := rowOffsetUint32Full(rowIDs[i+1], dims, dims, len(base))
+		off2, ok2 := rowOffsetUint32Full(rowIDs[i+2], dims, dims, len(base))
+		off3, ok3 := rowOffsetUint32Full(rowIDs[i+3], dims, dims, len(base))
+		if ok0 && ok1 && ok2 && ok3 {
+			if useAVX512 {
+				dotProduct4AVX512(
+					(*float32)(unsafe.Pointer(&dst[i])),
+					(*float32)(unsafe.Pointer(&base[off0])),
+					(*float32)(unsafe.Pointer(&base[off1])),
+					(*float32)(unsafe.Pointer(&base[off2])),
+					(*float32)(unsafe.Pointer(&base[off3])),
+					(*float32)(unsafe.Pointer(&query[0])),
+					dims,
+				)
+			} else {
+				dotProduct4AVX(
+					(*float32)(unsafe.Pointer(&dst[i])),
+					(*float32)(unsafe.Pointer(&base[off0])),
+					(*float32)(unsafe.Pointer(&base[off1])),
+					(*float32)(unsafe.Pointer(&base[off2])),
+					(*float32)(unsafe.Pointer(&base[off3])),
+					(*float32)(unsafe.Pointer(&query[0])),
+					dims,
+				)
+			}
+			usedSIMD = true
+			continue
+		}
+		for j := 0; j < batchDotRows; j++ {
+			dst[i+j] = dotProductIndexedOneGo(base, query, rowIDs[i+j], dims)
+		}
+	}
+	for ; i < n; i++ {
+		dst[i] = dotProductIndexedOneGo(base, query, rowIDs[i], dims)
+	}
+	return usedSIMD
+}
+
+func dotProductStrided(dst, base, query []float32, rowCount, dims, stride int) bool {
+	if rowCount <= 0 || len(dst) == 0 {
+		return false
+	}
+	n := min(len(dst), rowCount)
+	if !batchDotSIMDEligible(n, dims, len(query)) || stride <= 0 {
+		dotProductStridedGo(dst[:n], base, query, n, dims, stride)
+		return false
+	}
+	useAVX512 := cpu.X86.AVX512F && cpu.X86.AVX512VL
+	useAVX := !useAVX512 && cpu.X86.AVX2 && cpu.X86.FMA
+	if !useAVX512 && !useAVX {
+		dotProductStridedGo(dst[:n], base, query, n, dims, stride)
+		return false
+	}
+
+	usedSIMD := false
+	i := 0
+	for ; i+batchDotRows-1 < n; i += batchDotRows {
+		off0, ok0 := rowOffsetStrideFull(i, stride, dims, len(base))
+		off1, ok1 := rowOffsetStrideFull(i+1, stride, dims, len(base))
+		off2, ok2 := rowOffsetStrideFull(i+2, stride, dims, len(base))
+		off3, ok3 := rowOffsetStrideFull(i+3, stride, dims, len(base))
+		if ok0 && ok1 && ok2 && ok3 {
+			if useAVX512 {
+				dotProduct4AVX512(
+					(*float32)(unsafe.Pointer(&dst[i])),
+					(*float32)(unsafe.Pointer(&base[off0])),
+					(*float32)(unsafe.Pointer(&base[off1])),
+					(*float32)(unsafe.Pointer(&base[off2])),
+					(*float32)(unsafe.Pointer(&base[off3])),
+					(*float32)(unsafe.Pointer(&query[0])),
+					dims,
+				)
+			} else {
+				dotProduct4AVX(
+					(*float32)(unsafe.Pointer(&dst[i])),
+					(*float32)(unsafe.Pointer(&base[off0])),
+					(*float32)(unsafe.Pointer(&base[off1])),
+					(*float32)(unsafe.Pointer(&base[off2])),
+					(*float32)(unsafe.Pointer(&base[off3])),
+					(*float32)(unsafe.Pointer(&query[0])),
+					dims,
+				)
+			}
+			usedSIMD = true
+			continue
+		}
+		for j := 0; j < batchDotRows; j++ {
+			dst[i+j] = dotProductStridedOneGo(base, query, i+j, dims, stride)
+		}
+	}
+	for ; i < n; i++ {
+		dst[i] = dotProductStridedOneGo(base, query, i, dims, stride)
+	}
+	return usedSIMD
+}
+
+func batchDotSIMDEligible(rows, dims, queryLen int) bool {
+	return rows >= batchDotRows && dims >= batchDotMinDims && queryLen >= dims
+}
+
 func convolveValid32(dst, signal, kernel []float32) {
 	kLen := len(kernel)
 	for i := range dst {
@@ -350,6 +475,9 @@ func convolveValidMulti32(dsts [][]float32, signal []float32, kernels [][]float3
 //
 //go:noescape
 func dotProductAVX(a, b []float32) float32
+
+//go:noescape
+func dotProduct4AVX(results, row0, row1, row2, row3, vec *float32, n int)
 
 //go:noescape
 func addAVX(dst, a, b []float32)
