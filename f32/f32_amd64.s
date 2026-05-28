@@ -738,6 +738,7 @@ TEXT ·dotProductAVX512(SB), NOSPLIT, $0-52
     SHRQ $6, AX                // len / 64
     JZ   dot32_512_loop16_check
 
+PCALIGN $64
 dot32_512_loop64:
     // Load and FMA for acc0
     VMOVUPS (SI), Z1
@@ -776,6 +777,7 @@ dot32_512_loop16_check:
     SHRQ $4, AX
     JZ   dot32_512_remainder
 
+PCALIGN $64
 dot32_512_loop16:
     VMOVUPS (SI), Z1
     VMOVUPS (DI), Z2
