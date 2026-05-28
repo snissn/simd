@@ -70,32 +70,51 @@ func TestDotProductRowMajorAMD64ThresholdPredicates(t *testing.T) {
 	}
 }
 
-func TestDotProductRowMajorAMD64FalseReturnUsesGoFallbackForTails(t *testing.T) {
+func TestDotProductRowMajorAMD64FallbackUsesDotProductForValidRows(t *testing.T) {
 	const dims = 64
 	base := deterministicF32Vector(701, 3*dims)
 	query := deterministicF32Vector(702, dims)
-
 	savedDotProductImpl := dotProductImpl
-	dotProductImpl = func(a, b []float32) float32 {
-		t.Fatalf("false-return fallback tail used dotProduct dispatcher")
-		return 0
-	}
 	defer func() { dotProductImpl = savedDotProductImpl }()
 
-	indexedRowIDs := []uint32{0, 1, 99, 2}
-	indexedGot := make([]float32, len(indexedRowIDs))
-	indexedWant := make([]float32, len(indexedRowIDs))
-	dotProductIndexedGo(indexedWant, base, query, indexedRowIDs, dims)
-	if DotProductIndexed(indexedGot, base, query, indexedRowIDs, dims) {
-		t.Fatalf("indexed ragged batch unexpectedly reported optimized")
-	}
-	assertCloseSlice(t, indexedGot, indexedWant)
+	t.Run("indexed", func(t *testing.T) {
+		calls := 0
+		dotProductImpl = func(a, b []float32) float32 {
+			calls++
+			if len(a) != dims || len(b) != dims {
+				t.Fatalf("dotProduct len(a)=%d len(b)=%d, want %d", len(a), len(b), dims)
+			}
+			return float32(100 + calls)
+		}
 
-	stridedGot := make([]float32, 4)
-	stridedWant := make([]float32, 4)
-	dotProductStridedGo(stridedWant, base, query, 4, dims, dims)
-	if DotProductStrided(stridedGot, base, query, 4, dims, dims) {
-		t.Fatalf("strided ragged batch unexpectedly reported optimized")
-	}
-	assertCloseSlice(t, stridedGot, stridedWant)
+		rowIDs := []uint32{0, 99, 2}
+		got := make([]float32, len(rowIDs))
+		if DotProductIndexed(got, base, query, rowIDs, dims) {
+			t.Fatalf("indexed rows<4 unexpectedly reported optimized")
+		}
+		if calls != 2 {
+			t.Fatalf("indexed fallback dotProduct calls=%d, want 2", calls)
+		}
+		assertCloseSlice(t, got, []float32{101, 0, 102})
+	})
+
+	t.Run("strided", func(t *testing.T) {
+		calls := 0
+		dotProductImpl = func(a, b []float32) float32 {
+			calls++
+			if len(a) != dims || len(b) != dims {
+				t.Fatalf("dotProduct len(a)=%d len(b)=%d, want %d", len(a), len(b), dims)
+			}
+			return float32(200 + calls)
+		}
+
+		got := make([]float32, 3)
+		if DotProductStrided(got, base[:2*dims], query, 3, dims, dims) {
+			t.Fatalf("strided rows<4 unexpectedly reported optimized")
+		}
+		if calls != 2 {
+			t.Fatalf("strided fallback dotProduct calls=%d, want 2", calls)
+		}
+		assertCloseSlice(t, got, []float32{201, 202, 0})
+	})
 }

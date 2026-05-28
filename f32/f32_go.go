@@ -175,7 +175,7 @@ func dotProductIndexedOneGo(base, query []float32, rowID uint32, dims int) float
 	if n <= 0 {
 		return 0
 	}
-	return dotProductGo(base[offset:offset+n], query[:n])
+	return dotProduct(base[offset:offset+n], query[:n])
 }
 
 func dotProductStridedGo(dst, base, query []float32, rowCount, dims, stride int) {
@@ -207,7 +207,7 @@ func dotProductStridedOneGo(base, query []float32, row, dims, stride int) float3
 	if n <= 0 {
 		return 0
 	}
-	return dotProductGo(base[offset:offset+n], query[:n])
+	return dotProduct(base[offset:offset+n], query[:n])
 }
 
 func rowOffsetUint32InBase(rowID uint32, stride, baseLen int) (int, bool) {

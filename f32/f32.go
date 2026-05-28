@@ -188,7 +188,7 @@ func DotProductBatch(results []float32, rows [][]float32, vec []float32) {
 // the available common prefix; out-of-range row IDs, non-positive dims, or an
 // empty query produce a zero score for that row. The function returns true when
 // at least one optimized platform SIMD batch kernel was used; false means the
-// scalar fallback handled the call.
+// per-row fallback handled the call.
 func DotProductIndexed(dst, base, query []float32, rowIDs []uint32, dims int) bool {
 	n := min(len(dst), len(rowIDs))
 	if n == 0 {
@@ -205,7 +205,7 @@ func DotProductIndexed(dst, base, query []float32, rowIDs []uint32, dims int) bo
 // or a row extends past base, the dot uses the available common prefix;
 // non-positive rowCount/dims/stride or an empty query produce zero scores for
 // processed rows. The function returns true when at least one optimized platform
-// SIMD batch kernel was used; false means the scalar fallback handled the call.
+// SIMD batch kernel was used; false means the per-row fallback handled the call.
 func DotProductStrided(dst, base, query []float32, rowCount, dims, stride int) bool {
 	if rowCount <= 0 || len(dst) == 0 {
 		return false
