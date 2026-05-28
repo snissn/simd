@@ -490,6 +490,12 @@ func dotProductStridedFallback(dst, base, query []float32, rowCount, dims, strid
 	queryN := min(dims, len(query))
 	queryFull := query[:queryN]
 	maxRow := fullRowMaxIndex(len(base), queryN, stride)
+	if n-1 <= maxRow {
+		for i, off := 0, 0; i < n; i, off = i+1, off+stride {
+			dst[i] = dotProduct(base[off:off+queryN], queryFull)
+		}
+		return
+	}
 	for i := 0; i < n; i++ {
 		if i <= maxRow {
 			off := i * stride
