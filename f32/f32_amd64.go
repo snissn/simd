@@ -321,18 +321,18 @@ func dotProductIndexed(dst, base, query []float32, rowIDs []uint32, dims int) bo
 		return false
 	}
 	if !batchDotIndexedSIMDEligible(n, dims, len(query)) {
-		dotProductIndexedGo(dst[:n], base, query, rowIDs[:n], dims)
+		dotProductIndexedFallback(dst[:n], base, query, rowIDs[:n], dims)
 		return false
 	}
 	maxRow := fullRowMaxIndex(len(base), dims, dims)
 	if maxRow < 0 {
-		dotProductIndexedGo(dst[:n], base, query, rowIDs[:n], dims)
+		dotProductIndexedFallback(dst[:n], base, query, rowIDs[:n], dims)
 		return false
 	}
 	useAVX512 := cpu.X86.AVX512F && cpu.X86.AVX512VL
 	useAVX := !useAVX512 && cpu.X86.AVX2 && cpu.X86.FMA
 	if !useAVX512 && !useAVX {
-		dotProductIndexedGo(dst[:n], base, query, rowIDs[:n], dims)
+		dotProductIndexedFallback(dst[:n], base, query, rowIDs[:n], dims)
 		return false
 	}
 
@@ -386,18 +386,18 @@ func dotProductStrided(dst, base, query []float32, rowCount, dims, stride int) b
 	}
 	n := min(len(dst), rowCount)
 	if !batchDotStridedSIMDEligible(n, dims, stride, len(query)) {
-		dotProductStridedGo(dst[:n], base, query, n, dims, stride)
+		dotProductStridedFallback(dst[:n], base, query, n, dims, stride)
 		return false
 	}
 	maxRow := fullRowMaxIndex(len(base), dims, stride)
 	if maxRow < 0 {
-		dotProductStridedGo(dst[:n], base, query, n, dims, stride)
+		dotProductStridedFallback(dst[:n], base, query, n, dims, stride)
 		return false
 	}
 	useAVX512 := cpu.X86.AVX512F && cpu.X86.AVX512VL
 	useAVX := !useAVX512 && cpu.X86.AVX2 && cpu.X86.FMA
 	if !useAVX512 && !useAVX {
-		dotProductStridedGo(dst[:n], base, query, n, dims, stride)
+		dotProductStridedFallback(dst[:n], base, query, n, dims, stride)
 		return false
 	}
 
@@ -453,6 +453,51 @@ func fullRowMaxIndex(baseLen, dims, stride int) int {
 
 func rowIDInFullRange(rowID uint32, maxRow int) bool {
 	return maxRow >= 0 && uint64(rowID) <= uint64(maxRow)
+}
+
+func dotProductIndexedFallback(dst, base, query []float32, rowIDs []uint32, dims int) {
+	n := min(len(dst), len(rowIDs))
+	if n == 0 {
+		return
+	}
+	if dims <= 0 || len(query) == 0 {
+		clear(dst[:n])
+		return
+	}
+	queryN := min(dims, len(query))
+	queryFull := query[:queryN]
+	maxRow := fullRowMaxIndex(len(base), queryN, dims)
+	for i := 0; i < n; i++ {
+		rowID := rowIDs[i]
+		if rowIDInFullRange(rowID, maxRow) {
+			off := int(rowID) * dims
+			dst[i] = dotProduct(base[off:off+queryN], queryFull)
+			continue
+		}
+		dst[i] = dotProductIndexedOneGo(base, query, rowID, dims)
+	}
+}
+
+func dotProductStridedFallback(dst, base, query []float32, rowCount, dims, stride int) {
+	if rowCount <= 0 || len(dst) == 0 {
+		return
+	}
+	n := min(len(dst), rowCount)
+	if dims <= 0 || stride <= 0 || len(query) == 0 {
+		clear(dst[:n])
+		return
+	}
+	queryN := min(dims, len(query))
+	queryFull := query[:queryN]
+	maxRow := fullRowMaxIndex(len(base), queryN, stride)
+	for i := 0; i < n; i++ {
+		if i <= maxRow {
+			off := i * stride
+			dst[i] = dotProduct(base[off:off+queryN], queryFull)
+			continue
+		}
+		dst[i] = dotProductStridedOneGo(base, query, i, dims, stride)
+	}
 }
 
 func dotProductIndexedTail(base, query, queryFull []float32, rowID uint32, dims, maxRow int, allowDotProduct bool) float32 {
