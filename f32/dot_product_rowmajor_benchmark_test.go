@@ -79,6 +79,7 @@ func benchIndexedSIMD(b *testing.B, base, query []float32, rowIDs []uint32, dims
 	for i := 0; i < b.N; i++ {
 		sinkRowMajorUsed = DotProductIndexed(dst, base, query, rowIDs, dims)
 	}
+	reportOptimizedMetric(b, sinkRowMajorUsed)
 	reportRowMajorRate(b, len(rowIDs))
 	sinkRowMajorResults = dst
 }
@@ -115,6 +116,7 @@ func benchStridedSIMD(b *testing.B, base, query []float32, rows, dims, stride in
 	for i := 0; i < b.N; i++ {
 		sinkRowMajorUsed = DotProductStrided(dst, base, query, rows, dims, stride)
 	}
+	reportOptimizedMetric(b, sinkRowMajorUsed)
 	reportRowMajorRate(b, rows)
 	sinkRowMajorResults = dst
 }
@@ -169,6 +171,15 @@ func reportRowMajorRate(b *testing.B, rows int) {
 	if elapsed > 0 {
 		b.ReportMetric(float64(rows)*float64(b.N)/elapsed, "dots/s")
 	}
+}
+
+func reportOptimizedMetric(b *testing.B, optimized bool) {
+	b.Helper()
+	if optimized {
+		b.ReportMetric(1, "optimized")
+		return
+	}
+	b.ReportMetric(0, "optimized")
 }
 
 func makeBenchRowIDs(rows, baseRows int, pattern string) []uint32 {

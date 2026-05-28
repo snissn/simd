@@ -320,7 +320,7 @@ func dotProductIndexed(dst, base, query []float32, rowIDs []uint32, dims int) bo
 	if n == 0 {
 		return false
 	}
-	if !batchDotSIMDEligible(n, dims, len(query)) {
+	if !batchDotIndexedSIMDEligible(n, dims, len(query)) {
 		dotProductIndexedGo(dst[:n], base, query, rowIDs[:n], dims)
 		return false
 	}
@@ -385,7 +385,7 @@ func dotProductStrided(dst, base, query []float32, rowCount, dims, stride int) b
 		return false
 	}
 	n := min(len(dst), rowCount)
-	if !batchDotSIMDEligible(n, dims, len(query)) || stride <= 0 {
+	if !batchDotStridedSIMDEligible(n, dims, stride, len(query)) {
 		dotProductStridedGo(dst[:n], base, query, n, dims, stride)
 		return false
 	}
@@ -471,8 +471,51 @@ func dotProductStridedTail(base, query, queryFull []float32, row, dims, stride, 
 	return dotProductStridedOneGo(base, query, row, dims, stride)
 }
 
-func batchDotSIMDEligible(rows, dims, queryLen int) bool {
-	return rows >= batchDotRows && dims >= batchDotMinDims && queryLen >= dims
+func batchDotIndexedSIMDEligible(rows, dims, queryLen int) bool {
+	if rows < batchDotRows || dims < batchDotMinDims || queryLen < dims {
+		return false
+	}
+	// Conservative thresholds from the TreeDB-shaped Intel i5-11400F matrix.
+	// Keep slow large-row shapes on the fallback path until broader hardware
+	// evidence justifies enabling them.
+	if dims >= 2048 {
+		return rows < 64
+	}
+	if dims >= 768 {
+		return rows < 256
+	}
+	return true
+}
+
+func batchDotStridedSIMDEligible(rows, dims, stride, queryLen int) bool {
+	if rows < batchDotRows || dims < batchDotMinDims || stride <= 0 || queryLen < dims {
+		return false
+	}
+	// Conservative thresholds from the TreeDB-shaped Intel i5-11400F matrix.
+	// Strided thresholds differ for contiguous and padded rows because cache-line
+	// behavior changes the break-even point for larger dimensions.
+	contiguous := stride == dims
+	if dims >= 2048 {
+		switch {
+		case rows == 4 || rows >= 256:
+			return false
+		case contiguous && rows == 16:
+			return false
+		case !contiguous && rows == 64:
+			return false
+		default:
+			return true
+		}
+	}
+	if dims >= 768 {
+		if rows >= 256 {
+			return false
+		}
+		if contiguous && rows == 13 {
+			return false
+		}
+	}
+	return true
 }
 
 func convolveValid32(dst, signal, kernel []float32) {
